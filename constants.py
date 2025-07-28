@@ -1,7 +1,13 @@
-# Label Map :
-LABEL_MAP = {
-    0: "Radiation Necrosis",
-    1: "Tumor Recurrence"
+# Diagnosis information :
+DIAGNOSIS_INFO = {
+    0: {
+        "label": "Radiation Necrosis",
+        "color": "steelblue"
+    },
+    1: {
+        "label": "Tumor Recurrence",
+        "color": "indianred"
+    }
 }
 
 # Rename some columns :
@@ -43,15 +49,3 @@ L_MODELS = [
     "SVM",
     "decision_tree",
 ]
-
-# Plotting palettes :
-
-
-PALETTE_BINARY = {"0": "#66c2a5", "1": "#fc8d62"}   # Class 0 = green, Class 1 = orange
-PALETTE_TARGET = {0: 'steelblue', 1: 'indianred'}   # Diagnosis 0 = blue, 1 = red
-
-PALETTE_DECISION = {
-    "threshold": "black",
-    "youden": "limegreen",
-    "default": "red"
-}

@@ -6,6 +6,13 @@ import pandas as pd
 
 class Biomarker:
 
+    # Plotting palettes: Selected from seaborn color palettes,
+    # See: https://seaborn.pydata.org/tutorial/color_palettes.html
+    PALETTE_FEATURE_DISTRIBUTION = {
+        "boxplot": "Set3",
+        "kde": "Set1",
+    }
+
     def __init__(self,
                  params,
                  data=None,
@@ -51,7 +58,12 @@ class Biomarker:
         # Custom sort order for features (you can adjust as needed)
         lesion_features = [f for f in self.params if "lésion" in f or "path" in f]
         control_features = [f for f in self.params if "control" in f]
-        feature_order = lesion_features + control_features
+        ratio_features = [f for f in self.params if "ratio" in f]
+
+        feature_order = []
+        for list_features in [lesion_features, control_features, ratio_features]:
+            if len(list_features) > 0:
+                feature_order.extend(list_features)
 
         df_result["Feature"] = pd.Categorical(df_result["Feature"], categories=feature_order, ordered=True)
         df_result = df_result.sort_values(by=["Feature", "Class"])
@@ -79,16 +91,26 @@ class Biomarker:
 
                 if plot_type == "boxplot":
                     sns.boxplot(
-                        x="Diagnosis", y=feature, hue="Diagnosis",
-                        data=self.data, ax=ax, palette="Set3", dodge=False
+                        x="Diagnosis",
+                        y=feature,
+                        hue="Diagnosis",
+                        data=self.data,
+                        ax=ax,
+                        palette=self.PALETTE_FEATURE_DISTRIBUTION["boxplot"],
+                        dodge=False
                     )
                     ax.set_xlabel("Diagnosis")
                     ax.set_ylabel(feature)
 
                 elif plot_type == "kde":
                     sns.kdeplot(
-                        data=self.data, x=feature, hue="Diagnosis",
-                        ax=ax, fill=True, common_norm=False, palette="Set2"
+                        data=self.data,
+                        x=feature,
+                        hue="Diagnosis",
+                        ax=ax,
+                        fill=True,
+                        common_norm=False,
+                        palette=self.PALETTE_FEATURE_DISTRIBUTION["kde"],
                     )
                     ax.set_xlabel(feature)
                     ax.set_ylabel("Density")

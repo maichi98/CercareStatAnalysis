@@ -17,6 +17,9 @@ class Unibiomarker(Biomarker):
         "missing": "#B22222"  # Crimson for Missing Data
     }
 
+    LESION_VS_CONTROL_CMAP = {
+    }
+
     def __init__(self, name, data, test_data=None):
 
         self.name = name
@@ -80,29 +83,32 @@ class Unibiomarker(Biomarker):
     def analyze_path_control_ratio(self, target="Diagnosis"):
 
         df = self.data[[self.path, self.control, self.ratio, target]].dropna()
-        print("=" * 80)
+        print("=" * 150)
         print(f"🔍 Analyzing Biomarker: {self.name}")
-        print("=" * 80)
+        print("=" * 150)
 
-        # --- Correlation Analysis ---
-        print("-- Step 1: Correlation Analysis between Path and Control " + "-" * 22)
-        pearson_corr, pearson_p = pearsonr(df[self.path], df[self.control])
-        spearman_corr, spearman_p = spearmanr(df[self.path], df[self.control])
-        print(f"- Pearson  correlation: r = {pearson_corr:.3f}, p = {pearson_p:.4f}")
-        print(f"- Spearman correlation: r = {spearman_corr:.3f}, p = {spearman_p:.4f}\n")
-
-        # --- Ratio distribution summary ---
-        print("-- Step 2: Summary Statistics for Ratio " + "-" * 41)
+        # --- Ratio Distribution Summary ---
+        print("-" * 150)
+        print("--- Step 1: Summary Statistics for Ratio ")
+        print("-" * 150)
         self.describe_features(features=[self.ratio])
 
-        # --- Scatter plot and histogram ---
-        print("-- Step 3: Visualize Relationships " + "-" * 45)
+        # --- Boxplot and KDE of Ratio variable ---
+        print("-" * 150)
+        print("--- Step 2: Ratio Distribution by Diagnosis ")
+        print("-" * 150)
+        self.plot_feature_distributions(features=[self.ratio], plots=["boxplot", "kde"])
 
+        # --- Scatter plot and Histogram ---
+        print("-" * 150)
+        print("--- Step 3: Visualize Relationships ")
+        print("-" * 150)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        palette = {0: 'steelblue', 1: 'indianred'}
-        colors = df[target].map(palette)
 
+        palette = {k: v['color'] for k, v in constants.DIAGNOSIS_INFO.items()}
+        colors = df[target].map(palette)
         axes[0].scatter(df[self.control], df[self.path], c=colors, alpha=0.6, edgecolor='k', linewidth=0.5)
+
         for label in sorted(df[target].unique()):
             axes[0].scatter([], [], c=palette[label], label=f"{target} = {label}")
         axes[0].set_title("Scatter: Path vs Control")
@@ -120,28 +126,44 @@ class Unibiomarker(Biomarker):
         plt.tight_layout()
         plt.show()
 
-        # --- Boxplot + KDE using improved method ---
-        print("-- Step 4: Ratio Distributions by Diagnosis " + "-" * 40)
-        self.plot_feature_distributions(features=[self.ratio], plots=["boxplot", "kde"])
+        # --- Correlation Analysis ---
+        print("-" * 150)
+        print("--- Step 4: Correlation Analysis between Path and Control ")
+        print("-" * 150)
+        pearson_corr, pearson_p = pearsonr(df[self.path], df[self.control])
+        spearman_corr, spearman_p = spearmanr(df[self.path], df[self.control])
+        print(f"- Pearson  correlation: r = {pearson_corr:.3f}, p = {pearson_p:.4f}")
+        print(f"- Spearman correlation: r = {spearman_corr:.3f}, p = {spearman_p:.4f}\n")
 
         # Interpretation :
-        print("-- Step 5: Interpretation Guidance " + "-" * 47)
+        print("-" * 150)
+        print("--- Step 5: Interpretation Guidance ")
+        print("-" * 150)
 
-        if pearson_p > 0.05:
-            print("Pearson correlation is not statistically significant (p > 0.05) ! ")
+        if pearson_corr > 0.95 and pearson_p < 0.05:
+            print("Path and Control are highly linearly correlated (Pearson > 0.95, p < 0.05).")
+            print("The ratio is likely not informative ! ")
 
-        elif pearson_corr > 0.95:
-            print("Path and control are highly linearly correlated (Pearson > 0.95, p < 0.05) ! ")
-            print("The Ratio is likely redundant and not informative")
+        elif pearson_p < 0.05 < spearman_p:
+            print("Red Flag ! Pearson correlation is statistically significant (p < 0.05), but Spearman is not !")
 
-        elif spearman_p > 0.05:
-            print("Spearman correlation is not statistically significant (p > 0.05) !")
+        elif pearson_p > 0.05 > spearman_p:
+            print("Spearman correlation is significant (p < 0.05), but Pearson is not ! ")
+            print("This suggests a monotonic but non-linear relationship ! ")
+            print("The ratio may still be useful in this case")
 
-        elif spearman_corr > 0.9:
-            print("Path and control are strongly monotonically related (Spearman > 0.9, p < 0.05) ! ")
-            print("The Ratio may still offer useful non-linear contrast")
-        else:
-            print("Path and control are weakly correlated, with statistically significant results ! ")
-            print("The Ratio may introduce meaningful variation and is worth exploring")
+        elif pearson_p < 0.05 and spearman_p < 0.05:
+            if pearson_corr > 0.6:
+                print("Both Pearson and Spearman correlations are significant.")
+                print("Moderate to strong linear and monotonic association detected.")
+                print("There is linear correlation (>0.6), but not enough to discard the ratio as a feature")
+            else:
+                print("Both correlations are significant, but linear correlation is weak")
+                print("The ratio is probably useful as a feature")
 
-        print("=" * 80)
+        elif pearson_p > 0.05 and spearman_p > 0.05:
+            print("Neither Pearson nor Spearman correlation is statistically significant ! ")
+            print("No clear association between Path and Control ! ")
+            print("The ratio is a worthwhile feature to explore ! ")
+
+        print("=" * 150)
