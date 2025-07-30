@@ -1,7 +1,10 @@
 from IPython.display import display
 import matplotlib.pyplot as plt
+import scipy.stats as stats
 import seaborn as sns
 import pandas as pd
+
+import constants
 
 
 class Biomarker:
@@ -117,3 +120,52 @@ class Biomarker:
 
         plt.tight_layout()
         plt.show()
+
+    def plot_qq_by_group(self, feature, target="Diagnosis"):
+
+        df = self.data[[feature, target]].dropna()
+        groups = df[target].unique()
+
+        if len(groups) != 2:
+            raise ValueError(f"Expected exactly 2 groups in '{target}', but found {len(groups)}.")
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+        for i, group in enumerate(sorted(groups)):
+            group_data = df[df[target] == group][feature]
+            stats.probplot(group_data, dist="norm", plot=axes[i])
+            axes[i].set_title(f"Q–Q Plot: {feature} for {constants.DIAGNOSIS_INFO[group]['label']}")
+
+        plt.suptitle(f"Q–Q Plots for '{feature}' by {target}")
+        plt.tight_layout()
+        plt.show()
+
+    def test_group_difference(self, feature, target='Diagnosis', alpha=0.05):
+
+        df = self.data[[feature, target]].dropna()
+        groups = sorted(df[target].unique())
+
+        if len(groups) != 2:
+            raise ValueError("Only two groups are supported.")
+
+        values = {
+            group: df.loc[df[target] == group, feature].values
+            for group in groups
+        }
+
+        # Welch's T-test :
+        t_stat, t_p = stats.ttest_ind(values[groups[0]], values[groups[1]], equal_var=False)
+
+        # Mann-Whitney U test :
+        mw_stat, mw_p = stats.mannwhitneyu(values[groups[0]], values[groups[1]], alternative='two-sided')
+
+        # Conclusions :
+        t_conclusion = "✅ Significant difference" if t_p < alpha else "❌ No significant difference"
+        mw_conclusion = "✅ Significant difference" if mw_p < alpha else "❌ No significant difference"
+
+        print("=" * 100)
+        print("Group Comparison Results:")
+        print("-" * 100)
+        print(f"Welch’s t-test       → statistic = {t_stat:.4f}, p = {t_p:.4f}   → {t_conclusion}")
+        print(f"Mann–Whitney U test  → statistic = {mw_stat:.4f}, p = {mw_p:.4f}   → {mw_conclusion}")
+        print("=" * 100)
