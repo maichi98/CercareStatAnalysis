@@ -80,29 +80,10 @@ class Unibiomarker(Biomarker):
         plt.tight_layout()
         plt.show()
 
-    def analyze_path_control_ratio(self, target="Diagnosis"):
+    def plot_diagnostic_scatter_and_ratio(self, target="Diagnosis"):
 
         df = self.data[[self.path, self.control, self.ratio, target]].dropna()
-        print("=" * 150)
-        print(f"🔍 Analyzing Biomarker: {self.name}")
-        print("=" * 150)
 
-        # --- Ratio Distribution Summary ---
-        print("-" * 150)
-        print("--- Step 1: Summary Statistics for Ratio ")
-        print("-" * 150)
-        self.describe_features(features=[self.ratio])
-
-        # --- Boxplot and KDE of Ratio variable ---
-        print("-" * 150)
-        print("--- Step 2: Ratio Distribution by Diagnosis ")
-        print("-" * 150)
-        self.plot_feature_distributions(features=[self.ratio], plots=["boxplot", "kde"])
-
-        # --- Scatter plot and Histogram ---
-        print("-" * 150)
-        print("--- Step 3: Visualize Relationships ")
-        print("-" * 150)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
         palette = {k: v['color'] for k, v in constants.DIAGNOSIS_INFO.items()}
@@ -126,9 +107,16 @@ class Unibiomarker(Biomarker):
         plt.tight_layout()
         plt.show()
 
+    def evaluate_path_control_correlation(self, target="Diagnosis"):
+
+        df = self.data[[self.path, self.control, self.ratio, target]].dropna()
+        print("=" * 150)
+        print(f"🔍 Analyzing Biomarker: {self.name}")
+        print("=" * 150)
+
         # --- Correlation Analysis ---
         print("-" * 150)
-        print("--- Step 4: Correlation Analysis between Path and Control ")
+        print("--- Step 1: Correlation Analysis between Path and Control ")
         print("-" * 150)
         pearson_corr, pearson_p = pearsonr(df[self.path], df[self.control])
         spearman_corr, spearman_p = spearmanr(df[self.path], df[self.control])
@@ -137,7 +125,7 @@ class Unibiomarker(Biomarker):
 
         # Interpretation :
         print("-" * 150)
-        print("--- Step 5: Interpretation Guidance ")
+        print("--- Step 2: Interpretation Guidance ")
         print("-" * 150)
 
         if pearson_corr > 0.95 and pearson_p < 0.05:
@@ -167,3 +155,4 @@ class Unibiomarker(Biomarker):
             print("The ratio is a worthwhile feature to explore ! ")
 
         print("=" * 150)
+
