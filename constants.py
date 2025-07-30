@@ -2,11 +2,13 @@
 DIAGNOSIS_INFO = {
     0: {
         "label": "Radiation Necrosis",
-        "color": "steelblue"
+        "color": "steelblue",
+        "histogram_color": "lightsteelblue"
     },
     1: {
         "label": "Tumor Recurrence",
-        "color": "indianred"
+        "color": "indianred",
+        "histogram_color": "lightcoral"
     }
 }
 

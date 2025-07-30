@@ -3,8 +3,14 @@ import matplotlib.pyplot as plt
 import scipy.stats as stats
 import seaborn as sns
 import pandas as pd
+import numpy as np
+from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
 
 import constants
+from delong import delong_roc_variance
+from plots import plot_roc, plot_confusion_matrix, plot_distribution_with_cutoff
+from metrics import compute_youden_cutoff, compute_metrics, get_auc_ci, print_metrics
+from utils import get_adaptive_distribution_bins
 
 
 class Biomarker:
@@ -169,3 +175,98 @@ class Biomarker:
         print(f"Welch’s t-test       → statistic = {t_stat:.4f}, p = {t_p:.4f}   → {t_conclusion}")
         print(f"Mann–Whitney U test  → statistic = {mw_stat:.4f}, p = {mw_p:.4f}   → {mw_conclusion}")
         print("=" * 100)
+
+    def evaluate_feature_predictive_power(self, feature, target="Diagnosis", target_bin_count=100):
+
+        # Prepare data
+        df_train = self.data[[feature, target]].dropna()
+        df_test = self.test_data[[feature, target]].dropna()
+
+        x_train, y_train = df_train[feature], df_train[target]
+        x_test, y_test = df_test[feature], df_test[target]
+
+        # Flip feature if inversely predictive
+        flip_score = False
+        auc_check = roc_auc_score(y_train, x_train)
+        if auc_check < 0.5:
+            flip_score = True
+            x_train, x_test = -x_train, -x_test
+
+        # Compute ROC and optimal threshold
+        fpr, tpr, best_idx, cutoff = compute_youden_cutoff(y_train, x_train)
+        if flip_score:
+            cutoff = -cutoff
+
+        # Classifier rule logic
+        positive_if_higher = tpr[best_idx] > fpr[best_idx]
+        if positive_if_higher:
+            y_train_pred = (df_train[feature] >= cutoff).astype(int)
+            y_pred = (x_test >= cutoff).astype(int)
+            rule = f"{feature} {'≥' if not flip_score else '≤'} {cutoff:.3f}"
+        else:
+            y_train_pred = (df_train[feature] <= cutoff).astype(int)
+            y_pred = (x_test <= cutoff).astype(int)
+            rule = f"{feature} {'≤' if not flip_score else '≥'} {cutoff:.3f}"
+
+        # Train metrics and AUC
+        train_metrics = compute_metrics(y_true=y_train, y_pred=y_train_pred)
+        auc_train, auc_train_cov = delong_roc_variance(y_train.to_numpy(), x_train.to_numpy())
+        ci_train = get_auc_ci(auc_train, auc_train_cov)
+
+        # Test metrics and AUC
+        fpr_test, tpr_test, _, _ = compute_youden_cutoff(y_test, x_test)
+        test_metrics = compute_metrics(y_true=y_test, y_pred=y_pred)
+        auc_test, auc_test_cov = delong_roc_variance(y_test.to_numpy(), x_test.to_numpy())
+        ci_test = get_auc_ci(auc_test, auc_test_cov)
+
+        # Print results :
+        print("\n" + "=" * 80)
+        print(f"🔎 [ROC-Based Classification] Feature: '{feature}'")
+        print("-" * 80)
+        print(f"AUC (Train) : {auc_train:.3f}  (95% CI: {ci_train[0]:.3f} – {ci_train[1]:.3f})")
+        print(f"AUC (Test)  : {auc_test:.3f}  (95% CI: {ci_test[0]:.3f} – {ci_test[1]:.3f})\n")
+        print(f" Optimal threshold (Youden’s J): {cutoff:.3f}")
+        print(f" Classification Rule          : Class = 1 if {rule}")
+
+        if flip_score:
+            print("\n⚠️  Feature is inversely associated with the positive class (AUC < 0.5)")
+            print("   → ROC and threshold computed using the negated feature.\n")
+
+        print_metrics(f"TRAIN SET METRICS at threshold: {cutoff:.3f}", train_metrics)
+        print_metrics(f"TEST SET METRICS at threshold: {cutoff:.3f}", test_metrics)
+        print("=" * 80)
+
+        # Add ROC curve,
+
+        fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+
+        plot_roc(ax=axes[0, 0], fpr=fpr, tpr=tpr,
+                 phase="Train", title=f"ROC Curve (Train): {feature}",
+                 auc=auc_train, ci=ci_train, cutoff=cutoff,
+                 add_youden=True, best_idx=best_idx)
+
+        bins = get_adaptive_distribution_bins(df_train, feature, target_bin_count=target_bin_count)
+
+        plot_distribution_with_cutoff(ax=axes[0, 1], data=df_train,
+                                      feature=feature, target=target,
+                                      cutoff=cutoff, bins=bins,
+                                      title=f"Train Distribution: {feature}")
+        #
+        plot_confusion_matrix(ax=axes[0, 2], cm=train_metrics["cm"],
+                              title="Confusion Matrix (Train)")
+
+        plot_roc(ax=axes[1, 0], fpr=fpr_test, tpr=tpr_test,
+                 phase="Test", title=f"ROC Curve (Test): {feature}",
+                 auc=auc_test, ci=ci_test, cutoff=cutoff)
+
+        plot_distribution_with_cutoff(ax=axes[1, 1], data=df_test,
+                                      feature=feature, target=target,
+                                      cutoff=cutoff, bins=bins,
+                                      title=f"Test Distribution: {feature}")
+
+        plot_confusion_matrix(ax=axes[1, 2],
+                              cm=test_metrics["cm"],
+                              title="Confusion Matrix (Test)")
+
+        plt.tight_layout()
+        plt.show()
