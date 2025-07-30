@@ -5,15 +5,20 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
+from itertools import combinations
+from sklearn.tree import DecisionTreeClassifier, plot_tree, export_text
+
+from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 from scipy.stats import pearsonr, spearmanr
 from sklearn.calibration import calibration_curve
+from sklearn.preprocessing import StandardScaler
 
 from biomarker import Biomarker
 import constants
 from delong import delong_roc_variance
-from plots import plot_roc, plot_confusion_matrix, plot_sigmoid_with_ci, plot_calibration_curve, plot_proba_distribution
+from plots import *
 from metrics import compute_youden_cutoff, compute_metrics, get_auc_ci, print_metrics, compute_sigmoid_ci
 
 
@@ -169,8 +174,8 @@ class Unibiomarker(Biomarker):
         df_train = self.data[[feature, target]].dropna()
         df_test = self.test_data[[feature, target]].dropna()
 
-        x_train, y_train = df_train[feature], df_train[target]
-        x_test, y_test = df_test[feature], df_test[target]
+        x_train, y_train = df_train[[feature]], df_train[target]
+        x_test, y_test = df_test[[feature]], df_test[target]
 
         model = LogisticRegression(solver="liblinear")
         model.fit(x_train, y_train)
@@ -225,8 +230,8 @@ class Unibiomarker(Biomarker):
         plt.show()
 
         # Calibration + brier :
-        brier_train = brier_score_loss(y_true=y_train, y_prob=y_train_proba)
-        brier_test = brier_score_loss(y_true=y_test, y_prob=y_test_proba)
+        brier_train = brier_score_loss(y_true=y_train, y_proba=y_train_proba)
+        brier_test = brier_score_loss(y_true=y_test, y_proba=y_test_proba)
         prob_true_train, prob_pred_train = calibration_curve(y_true=y_train, y_prob=y_train_proba, n_bins=brier_bins_train)
         prob_true_test, prob_pred_test = calibration_curve(y_true=y_test, y_prob=y_test_proba, n_bins=brier_bins_test)
 
@@ -261,7 +266,7 @@ class Unibiomarker(Biomarker):
         plot_proba_distribution(ax=axes[2, 1], y_proba=y_test_proba, y_true=y_test,
                                 threshold=cutoff, title="Predicted Probability Distribution (Test)",
                                 target_bin_count=target_bin_count)
-
+        #
         # === Row 3: Calibration Curves ===
         plot_calibration_curve(ax=axes[3, 0], prob_pred=prob_pred_train, prob_true=prob_true_train,
                                title=f"Calibration Curve (Train) [{feature}]", brier_score=brier_train)
@@ -271,3 +276,381 @@ class Unibiomarker(Biomarker):
 
         plt.tight_layout()
         plt.show()
+
+    def evaluate_logistic_bivariate_model(self, target="Diagnosis", brier_bins_train=10, brier_bins_test=5, target_bin_count=100):
+
+        features = [self.path, self.control]
+
+        df_train, df_test = self.data[[*features, target]].dropna(), self.test_data[[*features, target]].dropna()
+        x_train, y_train, x_test, y_test = df_train[features], df_train[target], df_test[features], df_test[target]
+
+        scaler = StandardScaler()
+        x_train_scaled = scaler.fit_transform(x_train)
+        x_test_scaled = scaler.transform(x_test)
+
+        model = LogisticRegression(solver="liblinear")
+        model.fit(x_train_scaled, y_train)
+        y_train_proba, y_test_proba = model.predict_proba(x_train_scaled)[:, 1], model.predict_proba(x_test_scaled)[:, 1]
+
+        # ROC + Youden
+        fpr_train, tpr_train, best_idx, cutoff = compute_youden_cutoff(y_train, y_train_proba)
+        fpr_test, tpr_test, _, _ = compute_youden_cutoff(y_test, y_test_proba)
+
+        # Predictions
+        y_train_pred_05, y_test_pred_05 = (y_train_proba >= 0.5).astype(int), (y_test_proba >= 0.5).astype(int)
+        y_train_pred_youden, y_test_pred_youden = (y_train_proba >= cutoff).astype(int), (y_test_proba >= cutoff).astype(int)
+
+        # Metrics :
+        train_metrics_05 = compute_metrics(y_train, y_train_pred_05)
+        train_metrics_youden = compute_metrics(y_train, y_train_pred_youden)
+        test_metrics_05 = compute_metrics(y_test, y_test_pred_05)
+        test_metrics_youden = compute_metrics(y_test, y_test_pred_youden)
+
+        # AUC and CIs :
+        auc_train, auc_cov_train = delong_roc_variance(y_train.to_numpy(), y_train_proba)
+        auc_test, auc_cov_test = delong_roc_variance(y_test.to_numpy(), y_test_proba)
+        ci_train = get_auc_ci(auc_train, auc_cov_train)
+        ci_test = get_auc_ci(auc_test, auc_cov_test)
+
+        # Brier
+        brier_train = brier_score_loss(y_train, y_proba=y_train_proba)
+        brier_test = brier_score_loss(y_test, y_proba=y_test_proba)
+
+        # Calibration
+        prob_true_train, prob_pred_train = calibration_curve(y_train, y_train_proba, n_bins=brier_bins_train)
+        prob_true_test, prob_pred_test = calibration_curve(y_test, y_test_proba, n_bins=brier_bins_test)
+
+        # Print summary
+        print("=" * 100)
+        print(f"BIVARIATE LOGISTIC REGRESSION: {self.path} + {self.control}")
+        print("-" * 100)
+        print(f"AUC (Train): {auc_train:.3f} (95% CI: {ci_train[0]:.3f} – {ci_train[1]:.3f})")
+        print(f"AUC (Test) : {auc_test:.3f} (95% CI: {ci_test[0]:.3f} – {ci_test[1]:.3f})")
+        print(f"Optimal Threshold (Youden’s J): {cutoff:.3f}")
+        print("=" * 100)
+
+        print_metrics(f"[{self.path} + {self.control}] Train @ 0.5", train_metrics_05)
+        print_metrics(f"[{self.path} + {self.control}] Train @ Youden", train_metrics_youden)
+        print_metrics(f"[{self.path} + {self.control}] Test @ 0.5", test_metrics_05)
+        print_metrics(f"[{self.path} + {self.control}] Test @ Youden", test_metrics_youden)
+
+        # Confusion matrices :
+        fig_cm, axes_cm = plt.subplots(2, 2, figsize=(12, 8))
+        plot_confusion_matrix(axes_cm[0, 0], train_metrics_05["cm"], f"[{self.path} + {self.control}] Train @ 0.5")
+        plot_confusion_matrix(axes_cm[0, 1], train_metrics_youden["cm"], f"[{self.path} + {self.control}] Train @ Youden")
+        plot_confusion_matrix(axes_cm[1, 0], test_metrics_05["cm"], f"[{self.path} + {self.control}] Test @ 0.5")
+        plot_confusion_matrix(axes_cm[1, 1], test_metrics_youden["cm"], f"[{self.path} + {self.control}] Test @ Youden")
+        plt.tight_layout()
+        plt.show()
+
+        # ROC curves
+        fig_roc, axes_roc = plt.subplots(1, 2, figsize=(14, 6))
+        plot_roc(ax=axes_roc[0], fpr=fpr_train, tpr=tpr_train, phase="Train",
+                 title=f"ROC Curve (Train) [{self.path} + {self.control}]",
+                 auc=auc_train, ci=ci_train, cutoff=cutoff, add_youden=True, best_idx=best_idx)
+
+        plot_roc(ax=axes_roc[1], fpr=fpr_test, tpr=tpr_test, phase="Test",
+                 title=f"ROC Curve (Test) [{self.path} + {self.control}]",
+                 auc=auc_test, ci=ci_test, cutoff=cutoff)
+        plt.tight_layout()
+        plt.show()
+
+        # Calibration curves :
+        fig_cal, axes_cal = plt.subplots(1, 2, figsize=(14, 6))
+        plot_calibration_curve(ax=axes_cal[0], prob_pred=prob_pred_train, prob_true=prob_true_train,
+                               title=f"Calibration Curve (Train) [{self.path} + {self.control}]",
+                               brier_score=brier_train)
+
+        plot_calibration_curve(ax=axes_cal[1], prob_pred=prob_pred_test, prob_true=prob_true_test,
+                               title=f"Calibration Curve (Test) [{self.path} + {self.control}]",
+                               brier_score=brier_test)
+        plt.tight_layout()
+        plt.show()
+
+        # === Decision Surfaces with Threshold Boundaries ===
+        fig_dec, axes_dec = plt.subplots(1, 2, figsize=(14, 6))
+
+        plot_logistic_decision_surface(ax=axes_dec[0], model=model, X_scaled=x_train_scaled, y=y_train,
+                                       feature_names=[self.path, self.control], threshold=0.5, cutoff=cutoff,
+                                       title=f"Decision Surface (Train) [{self.path} + {self.control}]")
+
+        plot_logistic_decision_surface(ax=axes_dec[1], model=model, X_scaled=x_test_scaled, y=y_test,
+                                       feature_names=[self.path, self.control], threshold=0.5, cutoff=cutoff,
+                                       title=f"Decision Surface (Test) [{self.path} + {self.control}]")
+
+        plt.tight_layout()
+        plt.show()
+
+        # === Predicted Probability Distributions (Train/Test) ===
+        fig_dist, axes_dist = plt.subplots(1, 2, figsize=(14, 6))
+
+        plot_proba_distribution(ax=axes_dist[0], y_proba=y_train_proba, y_true=y_train, threshold=cutoff,
+                                title=f"Predicted Probability Distribution (Train) [{self.path} + {self.control}]",
+                                target_bin_count=target_bin_count)
+
+        plot_proba_distribution(ax=axes_dist[1], y_proba=y_test_proba, y_true=y_test, threshold=cutoff,
+                                title=f"Predicted Probability Distribution (Test) [{self.path} + {self.control}]",
+                                target_bin_count=target_bin_count)
+
+        plt.tight_layout()
+        plt.show()
+
+    def evaluate_svm_bivariate_model(self, target="Diagnosis", kernel="linear"):
+
+        features = [self.path, self.control]
+
+        df_train, df_test = self.data[[*features, target]].dropna(), self.test_data[[*features, target]].dropna()
+        x_train, y_train, x_test, y_test = df_train[features], df_train[target], df_test[features], df_test[target]
+
+        scaler = StandardScaler()
+        x_train_scaled = scaler.fit_transform(x_train)
+        x_test_scaled = scaler.transform(x_test)
+
+        model = SVC(kernel=kernel, probability=True)
+        model.fit(x_train_scaled, y_train)
+        f_train, f_test = model.decision_function(x_train_scaled), model.decision_function(x_test_scaled)
+        p_train, p_test = model.predict_proba(x_train_scaled)[:, 1], model.predict_proba(x_test_scaled)[:, 1]
+
+        # ROC + Youden :
+        fpr_f_train, tpr_f_train, best_idx_f_train, cutoff_f = compute_youden_cutoff(y_train, f_train)
+        fpr_f_test, tpr_f_test, _, _ = compute_youden_cutoff(y_test, f_test)
+        fpr_p_train, tpr_p_train, best_idx_p_train, cutoff_p = compute_youden_cutoff(y_train, p_train)
+        fpr_p_test, tpr_p_test, _, _ = compute_youden_cutoff(y_test, p_test)
+
+        # Predictions :
+        y_train_pred_f_05, y_test_pred_f_05 = (f_train >= 0).astype(int), (f_test >= 0).astype(int)
+        y_train_pred_f_youden, y_test_pred_f_youden = (f_train >= cutoff_f).astype(int), (f_test >= cutoff_f).astype(int)
+        y_train_pred_p_05, y_test_pred_p_05 = (p_train >= 0.5).astype(int), (p_test >= 0.5).astype(int)
+        y_train_pred_p_youden, y_test_pred_p_youden = (p_train >= cutoff_p).astype(int), (p_test >= cutoff_p).astype(int)
+
+        # Metrics :
+        train_metrics_f_05 = compute_metrics(y_train, y_train_pred_f_05)
+        train_metrics_f_youden = compute_metrics(y_train, y_train_pred_f_youden)
+        test_metrics_f_05 = compute_metrics(y_test, y_test_pred_f_05)
+        test_metrics_f_youden = compute_metrics(y_test, y_test_pred_f_youden)
+        train_metrics_p_05 = compute_metrics(y_train, y_train_pred_p_05)
+        train_metrics_p_youden = compute_metrics(y_train, y_train_pred_p_youden)
+        test_metrics_p_05 = compute_metrics(y_test, y_test_pred_p_05)
+        test_metrics_p_youden = compute_metrics(y_test, y_test_pred_p_youden)
+
+        # AUC and CIs :
+        auc_f_train, auc_cov_f_train = delong_roc_variance(y_train.to_numpy(), f_train)
+        auc_f_test, auc_cov_f_test = delong_roc_variance(y_test.to_numpy(), f_test)
+        auc_p_train, auc_cov_p_train = delong_roc_variance(y_train.to_numpy(), p_train)
+        auc_p_test, auc_cov_p_test = delong_roc_variance(y_test.to_numpy(), p_test)
+        ci_f_train = get_auc_ci(auc_f_train, auc_cov_f_train)
+        ci_f_test = get_auc_ci(auc_f_test, auc_cov_f_test)
+        ci_p_train = get_auc_ci(auc_p_train, auc_cov_p_train)
+        ci_p_test = get_auc_ci(auc_p_test, auc_cov_p_test)
+
+        print("=" * 100)
+        print(f"SVM ({kernel.upper()}) BIVARIATE: {self.path} + {self.control}")
+        print("-" * 100)
+        print(f"[Margin] Train AUC : {auc_f_train:.3f} (95% CI: {ci_f_train[0]:.3f} – {ci_f_train[1]:.3f})")
+        print(f"[Margin] Test  AUC : {auc_f_test:.3f} (95% CI: {ci_f_test[0]:.3f} – {ci_f_test[1]:.3f})")
+        print(f"Optimal Margin Cutoff (Youden): {cutoff_f:.3f}")
+        print("-" * 100)
+        print(f"[Proba]  Train AUC : {auc_p_train:.3f} (95% CI: {ci_p_train[0]:.3f} – {ci_p_train[1]:.3f})")
+        print(f"[Proba]  Test  AUC : {auc_p_test:.3f} (95% CI: {ci_p_test[0]:.3f} – {ci_p_test[1]:.3f})")
+        print(f"Optimal Proba  Cutoff (Youden): {cutoff_p:.3f}")
+        print("=" * 100)
+
+        print_metrics(f"[{self.path} + {self.control}] Train @ f(x) ≥ 0", train_metrics_f_05)
+        print_metrics(f"[{self.path} + {self.control}] Train @ f(x) ≥ Youden", train_metrics_f_youden)
+        print_metrics(f"[{self.path} + {self.control}] Train @ P(x) ≥ 0.5", train_metrics_p_05)
+        print_metrics(f"[{self.path} + {self.control}] Train @ P(x) ≥ Youden", train_metrics_p_youden)
+        print_metrics(f"[{self.path} + {self.control}] Test  @ f(x) ≥ 0", test_metrics_f_05)
+        print_metrics(f"[{self.path} + {self.control}] Test  @ f(x) ≥ Youden", test_metrics_f_youden)
+        print_metrics(f"[{self.path} + {self.control}] Test  @ P(x) ≥ 0.5", test_metrics_p_05)
+        print_metrics(f"[{self.path} + {self.control}] Test  @ P(x) ≥ Youden", test_metrics_p_youden)
+
+        fig_cm, axes_cm = plt.subplots(4, 2, figsize=(14, 16))
+
+        plot_confusion_matrix(ax=axes_cm[0, 0], cm=train_metrics_f_05["cm"], title=f"[{self.path} + {self.control}] Train @ f(x) ≥ 0")
+        plot_confusion_matrix(ax=axes_cm[0, 1], cm=test_metrics_f_05["cm"], title=f"[{self.path} + {self.control}] Test  @ f(x) ≥ 0")
+        plot_confusion_matrix(ax=axes_cm[1, 0], cm=train_metrics_f_youden["cm"], title=f"[{self.path} + {self.control}] Train @ f(x) ≥ Youden")
+        plot_confusion_matrix(ax=axes_cm[1, 1], cm=test_metrics_f_youden["cm"], title=f"[{self.path} + {self.control}] Test  @ f(x) ≥ Youden")
+        plot_confusion_matrix(ax=axes_cm[2, 0], cm=train_metrics_p_05["cm"], title=f"[{self.path} + {self.control}] Train @ P(x) ≥ 0.5")
+        plot_confusion_matrix(ax=axes_cm[2, 1], cm=test_metrics_p_05["cm"], title=f"[{self.path} + {self.control}] Test  @ P(x) ≥ 0.5")
+        plot_confusion_matrix(ax=axes_cm[3, 0], cm=train_metrics_p_youden["cm"], title=f"[{self.path} + {self.control}] Train @ P(x) ≥ Youden")
+        plot_confusion_matrix(ax=axes_cm[3, 1], cm=test_metrics_p_youden["cm"], title=f"[{self.path} + {self.control}] Test  @ P(x) ≥ Youden")
+
+        plt.tight_layout()
+        plt.show()
+
+        # === ROC Curves ===
+        fig_roc, axes_roc = plt.subplots(2, 2, figsize=(14, 12))
+
+        # Margin-based ROC curves
+        plot_roc(ax=axes_roc[0, 0], fpr=fpr_f_train, tpr=tpr_f_train, phase="Train",
+                 title=f"ROC Curve (Train, Margin) [{self.path} + {self.control}]",
+                 auc=auc_f_train, ci=ci_f_train, cutoff=cutoff_f,
+                 add_youden=True, best_idx=best_idx_f_train)
+        plot_roc(ax=axes_roc[0, 1], fpr=fpr_f_test, tpr=tpr_f_test, phase="Test",
+                 title=f"ROC Curve (Test, Margin) [{self.path} + {self.control}]",
+                 auc=auc_f_test, ci=ci_f_test, cutoff=cutoff_f)
+
+        # Proba-based ROC curves
+        plot_roc(ax=axes_roc[1, 0], fpr=fpr_p_train, tpr=tpr_p_train, phase="Train",
+                 title=f"ROC Curve (Train, Proba) [{self.path} + {self.control}]",
+                 auc=auc_p_train, ci=ci_p_train, cutoff=cutoff_p,
+                 add_youden=True, best_idx=best_idx_p_train)
+
+        plot_roc(ax=axes_roc[1, 1], fpr=fpr_p_test, tpr=tpr_p_test, phase="Test",
+                 title=f"ROC Curve (Test, Proba) [{self.path} + {self.control}]",
+                 auc=auc_p_test, ci=ci_p_test, cutoff=cutoff_p)
+
+        plt.tight_layout()
+        plt.show()
+
+        # Plot calibration curves
+        fig_cal, axes_cal = plt.subplots(1, 2, figsize=(14, 6))
+        plot_svm_calibration_curve(ax=axes_cal[0], y_true=y_train, proba=p_train, margin=f_train,
+                                   title=f"Calibration Curve (Train) [{self.path} + {self.control}]")
+        plot_svm_calibration_curve(ax=axes_cal[1], y_true=y_test, proba=p_test, margin=f_test,
+                                   title=f"Calibration Curve (Test) [{self.path} + {self.control}]")
+        plt.tight_layout()
+        plt.show()
+
+        # === Decision Surfaces (Separated by Geometric / Probabilistic) ===
+        fig_dec, axes_dec = plt.subplots(2, 2, figsize=(14, 12))
+        plot_svm_decision_surfaces(ax_geom=axes_dec[0, 0], ax_proba=axes_dec[0, 1],
+                                   model=model, X_scaled=x_train_scaled, y=y_train,
+                                   feature_names=[self.path, self.control],
+                                   youden_f=cutoff_f, youden_p=cutoff_p,
+                                   title_prefix="Train")
+
+        plot_svm_decision_surfaces(ax_geom=axes_dec[1, 0], ax_proba=axes_dec[1, 1],
+                                   model=model, X_scaled=x_test_scaled, y=y_test,
+                                   feature_names=[self.path, self.control],
+                                   youden_f=cutoff_f, youden_p=cutoff_p,
+                                   title_prefix="Test")
+
+        plt.tight_layout()
+        plt.show()
+
+    def evaluate_tree_trivariate_model(self, target="Diagnosis", max_depth=3, criterion="gini"):
+
+        features = [self.path, self.control, self.ratio]
+
+        df_train, df_test = self.data[[*features, target]].dropna(), self.test_data[[*features, target]].dropna()
+        x_train, y_train, x_test, y_test = df_train[features], df_train[target], df_test[features], df_test[target]
+
+        scaler = StandardScaler()
+        x_train_scaled = scaler.fit_transform(x_train)
+        x_test_scaled = scaler.transform(x_test)
+
+        model = DecisionTreeClassifier(max_depth=max_depth, criterion=criterion, random_state=42)
+        model.fit(x_train_scaled, y_train)
+        y_train_proba, y_test_proba = model.predict_proba(x_train_scaled)[:, 1], model.predict_proba(x_test_scaled)[:, 1]
+
+        # ROC + Youden
+        fpr_train, tpr_train, _, _ = compute_youden_cutoff(y_train, y_train_proba)
+        fpr_test, tpr_test, _, _ = compute_youden_cutoff(y_test, y_test_proba)
+
+        # Predictions
+        y_pred_train, y_pred_test = model.predict(x_train_scaled), model.predict(x_test_scaled)
+
+        # Metrics
+        train_metrics = compute_metrics(y_train, y_pred_train)
+        test_metrics = compute_metrics(y_test, y_pred_test)
+
+        # AUC and CIs
+        auc_train, auc_cov_train = delong_roc_variance(y_train.to_numpy(), y_train_proba)
+        auc_test, auc_cov_test = delong_roc_variance(y_test.to_numpy(), y_test_proba)
+        ci_train = get_auc_ci(auc_train, auc_cov_train)
+        ci_test = get_auc_ci(auc_test, auc_cov_test)
+
+        # Brier
+        brier_train = brier_score_loss(y_train, y_proba=y_train_proba)
+        brier_test = brier_score_loss(y_test, y_proba=y_test_proba)
+
+        # Calibration
+        prob_true_train, prob_pred_train = calibration_curve(y_train, y_train_proba, n_bins=10)
+        prob_true_test, prob_pred_test = calibration_curve(y_test, y_test_proba, n_bins=10)
+
+        # Print summary
+        print("=" * 100)
+        print(f"DECISION TREE (max_depth={max_depth}, criterion={criterion.upper()}): {self.path} + {self.control} + {self.ratio}")
+        print("-" * 100)
+        print(f"AUC (Train): {auc_train:.3f} (95% CI: {ci_train[0]:.3f} – {ci_train[1]:.3f})")
+        print(f"AUC (Test) : {auc_test:.3f} (95% CI: {ci_test[0]:.3f} – {ci_test[1]:.3f})")
+        print("-" * 100)
+
+        print_metrics(f"[{self.path} + {self.control} + {self.ratio}] Train", train_metrics)
+        print_metrics(f"[{self.path} + {self.control} + {self.ratio}] Test", test_metrics)
+
+        # Confusions matrices
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        plot_confusion_matrix(ax=axes[0], cm=train_metrics["cm"], title=f"[{self.path} + {self.control} + {self.ratio}] Train")
+        plot_confusion_matrix(ax=axes[1], cm=test_metrics["cm"], title=f"[{self.path} + {self.control} + {self.ratio}] Test")
+        plt.tight_layout()
+        plt.show()
+
+        # ROC curves
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        plot_roc(ax=axes[0], fpr=fpr_train, tpr=tpr_train, phase="Train",
+                 title=f"ROC Curve (Train) [{self.path} + {self.control} + {self.ratio}]",
+                 auc=auc_train, ci=ci_train)
+
+        plot_roc(ax=axes[1], fpr=fpr_test, tpr=tpr_test, phase="Test",
+                 title=f"ROC Curve (Test) [{self.path} + {self.control} + {self.ratio}]",
+                 auc=auc_test, ci=ci_test)
+
+        plt.tight_layout()
+        plt.show()
+
+        # Calibration curves
+        fig_cal, axes_cal = plt.subplots(1, 2, figsize=(14, 6))
+        plot_calibration_curve(ax=axes_cal[0], prob_pred=prob_pred_train, prob_true=prob_true_train,
+                               title=f"Calibration Curve (Train) [{self.path} + {self.control} + {self.ratio}]",
+                               brier_score=brier_train)
+        plot_calibration_curve(ax=axes_cal[1], prob_pred=prob_pred_test, prob_true=prob_true_test,
+                               title=f"Calibration Curve (Test) [{self.path} + {self.control} + {self.ratio}]",
+                               brier_score=brier_test)
+
+        plt.tight_layout()
+        plt.show()
+
+        # Decision surfaces for each 2D projection
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        pairs = list(combinations(range(3), 2))
+
+        for ax, (i, j) in zip(axes, pairs):
+            xi = x_train_scaled[:, i]
+            xj = x_train_scaled[:, j]
+
+            # Create a meshgrid
+            xi_range = np.linspace(xi.min() - 0.5, xi.max() + 0.5, 200)
+            xj_range = np.linspace(xj.min() - 0.5, xj.max() + 0.5, 200)
+            xx, yy = np.meshgrid(xi_range, xj_range)
+
+            # Fill in all 3 dimensions
+            grid = np.zeros((xx.size, 3))
+            grid[:, i] = xx.ravel()
+            grid[:, j] = yy.ravel()
+            preds = model.predict(grid).reshape(xx.shape)
+
+            ax.contourf(xx, yy, preds, cmap="RdBu", alpha=0.6)
+            ax.scatter(xi, xj, c=y_train, cmap="RdBu_r", edgecolor="k", s=30)
+            ax.set_xlabel(features[i])
+            ax.set_ylabel(features[j])
+            ax.set_title(f"Decision Surface: {features[i]} vs {features[j]}")
+
+        plt.tight_layout()
+        plt.show()
+
+        # Plot the decision tree
+        plt.figure(figsize=(14, 8))
+        plot_tree(model, feature_names=features, class_names=["0", "1"],
+                  filled=True, rounded=True, fontsize=10)
+        plt.title("Decision Tree Structure")
+        plt.tight_layout()
+        plt.show()
+
+        # Print textual tree rules
+        print("\n" + "=" * 80)
+        print("Tree Rules :")
+        print("-" * 80)
+        print(export_text(model, feature_names=features))
+        print("=" * 80)

@@ -1,9 +1,10 @@
 import seaborn as sns
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import numpy as np
 import constants
-
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.calibration import calibration_curve
 
 # Colormap reference from matplotlib: https://matplotlib.org/stable/gallery/color/colormap_reference.html
 CONFUSION_MATRIX_CMAP = "bwr"
@@ -152,3 +153,94 @@ def plot_proba_distribution(ax, y_proba, y_true, threshold, title, target_bin_co
         plt.Line2D([0], [0], color="red", linestyle="--", label=f"Threshold = {threshold:.2f}")
     ]
     ax.legend(handles=handles, title="Legend")
+
+
+def plot_logistic_decision_surface(ax, model, X_scaled, y, feature_names, threshold=0.5, cutoff=None, title=""):
+
+    xx, yy = np.meshgrid(
+        np.linspace(X_scaled[:, 0].min(), X_scaled[:, 0].max(), 200),
+        np.linspace(X_scaled[:, 1].min(), X_scaled[:, 1].max(), 200)
+    )
+    grid = np.c_[xx.ravel(), yy.ravel()]
+    probs = model.predict_proba(grid)[:, 1].reshape(xx.shape)
+
+    # Probability background
+    ax.contourf(xx, yy, probs, levels=25, cmap="RdBu", alpha=0.8)
+
+    # Decision boundaries
+    ax.contour(xx, yy, probs, levels=[threshold], colors='black', linestyles='--', linewidths=2)
+    if cutoff is not None:
+        ax.contour(xx, yy, probs, levels=[cutoff], colors='green', linestyles='-', linewidths=2)
+
+    # Data points
+    ax.scatter(X_scaled[:, 0], X_scaled[:, 1], c=y, cmap="RdBu_r", edgecolor="k", s=30)
+
+    # Labels and legend
+    ax.set_title(title)
+    ax.set_xlabel(feature_names[0])
+    ax.set_ylabel(feature_names[1])
+    ax.legend(handles=[
+        plt.Line2D([], [], marker='o', color='w', markerfacecolor=plt.cm.RdBu_r(0.1), label='Class 0', markersize=10),
+        plt.Line2D([], [], marker='o', color='w', markerfacecolor=plt.cm.RdBu_r(0.9), label='Class 1', markersize=10),
+        plt.Line2D([], [], color='black', linestyle='--', label='Threshold 0.5'),
+        plt.Line2D([], [], color='green', linestyle='-', label="Youden's J")
+    ])
+
+
+def plot_svm_calibration_curve(ax, y_true, proba, margin, title):
+
+    # Scale margin scores to [0, 1] for comparison
+    margin_scaled = MinMaxScaler().fit_transform(margin.reshape(-1, 1)).flatten()
+
+    # Compute calibration curves
+    prob_true_margin, prob_pred_margin = calibration_curve(y_true, margin_scaled, n_bins=10)
+    prob_true_proba, prob_pred_proba = calibration_curve(y_true, proba, n_bins=10)
+
+    # Plot
+    ax.plot(prob_pred_margin, prob_true_margin, marker='o', linestyle='-', label="(Margin)")
+    ax.plot(prob_pred_proba, prob_true_proba, marker='s', linestyle='-', label="Platt-Calibrated")
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Perfect Calibration")
+    ax.set_title(title)
+    ax.set_xlabel("Predicted Value")
+    ax.set_ylabel("Empirical Frequency")
+    ax.legend()
+
+
+def plot_svm_decision_surfaces(ax_geom, ax_proba, model, X_scaled, y, feature_names, youden_f, youden_p, title_prefix):
+
+    # Generate mesh grid
+    xx, yy = np.meshgrid(
+        np.linspace(X_scaled[:, 0].min() - 0.5, X_scaled[:, 0].max() + 0.5, 200),
+        np.linspace(X_scaled[:, 1].min() - 0.5, X_scaled[:, 1].max() + 0.5, 200)
+    )
+    grid = np.c_[xx.ravel(), yy.ravel()]
+    Z = model.decision_function(grid).reshape(xx.shape)
+    P = model.predict_proba(grid)[:, 1].reshape(xx.shape)
+
+    # === Geometric Plot (f(x)) ===
+    ax_geom.contourf(xx, yy, Z, levels=25, cmap="RdBu", alpha=0.8)
+    ax_geom.contour(xx, yy, Z, levels=[0], colors='yellow', linewidths=2)
+    ax_geom.contour(xx, yy, Z, levels=[-1, 1], colors='yellow', linestyles=':', linewidths=1)
+    ax_geom.contour(xx, yy, Z, levels=[youden_f], colors='limegreen', linewidths=2)
+    ax_geom.scatter(X_scaled[:, 0], X_scaled[:, 1], c=y, cmap="RdBu_r", edgecolor="k", s=30)
+    ax_geom.set_title(f"{title_prefix} – Geometric (f(x))")
+    ax_geom.set_xlabel(feature_names[0])
+    ax_geom.set_ylabel(feature_names[1])
+    ax_geom.legend(handles=[
+        plt.Line2D([], [], color='yellow', linestyle='-', label='f(x) = 0'),
+        plt.Line2D([], [], color='yellow', linestyle=':', label='f(x) = ±1'),
+        plt.Line2D([], [], color='limegreen', linestyle='-', label=f'Youden f(x) = {youden_f:.2f}')
+    ])
+
+    # === Probabilistic Plot (P(x)) ===
+    ax_proba.contourf(xx, yy, P, levels=25, cmap="RdBu", alpha=0.8)
+    ax_proba.contour(xx, yy, P, levels=[0.5], colors='white', linestyles='--', linewidths=2)
+    ax_proba.contour(xx, yy, P, levels=[youden_p], colors='limegreen', linewidths=2)
+    ax_proba.scatter(X_scaled[:, 0], X_scaled[:, 1], c=y, cmap="RdBu_r", edgecolor="k", s=30)
+    ax_proba.set_title(f"{title_prefix} – Probabilistic (P(x))")
+    ax_proba.set_xlabel(feature_names[0])
+    ax_proba.set_ylabel(feature_names[1])
+    ax_proba.legend(handles=[
+        plt.Line2D([], [], color='white', linestyle='--', label='P(x) = 0.5'),
+        plt.Line2D([], [], color='limegreen', linestyle='-', label=f'Youden P(x) = {youden_p:.2f}')
+    ])
