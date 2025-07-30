@@ -100,3 +100,55 @@ def plot_distribution_with_cutoff(ax,
         plt.Line2D([0], [0], color="red", linestyle="--", label=f"Cutoff = {cutoff:.2f}")
     ]
     ax.legend(handles=handles, title="Legend")
+
+
+def plot_sigmoid_with_ci(ax, x, y_proba, y_true, x_range, y_pred, y_lower, y_upper, threshold, title, feature):
+
+    palette = {0: "#1f77b4", 1: "#d62728"}  # blue = 0, red = 1
+    sns.scatterplot(x=x[feature], y=y_proba, hue=y_true, ax=ax, palette=palette, edgecolor='black', s=70)
+    ax.plot(x_range, y_pred, color='black', label='Fitted Sigmoid')
+    ax.fill_between(x_range, y_lower, y_upper, color='gray', alpha=0.3, label='95% CI')
+    ax.axhline(threshold, color='red', linestyle='--', label=f"Youden Thresh = {threshold:.2f}")
+    ax.set_title(title)
+    ax.set_xlabel(feature)
+    ax.set_ylabel("Predicted Probability")
+    ax.legend()
+
+
+def plot_calibration_curve(ax, prob_pred, prob_true, title, brier_score=None):
+
+    ax.plot(prob_pred, prob_true, marker='o', label="Model")
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Perfect Calibration")
+
+    ax.set_title(title)
+    ax.set_xlabel("Predicted Probability")
+    ax.set_ylabel("True Proportion")
+    ax.legend()
+
+    if brier_score is not None:
+        ax.text(0.05, 0.05, f"Brier = {brier_score:.3f}", transform=ax.transAxes, fontsize=10, color="black")
+
+
+def plot_proba_distribution(ax, y_proba, y_true, threshold, title, target_bin_count=100):
+    df = pd.DataFrame({
+        "proba": y_proba,
+        "true_label": y_true.astype(str)
+    })
+
+    palette = {"0": "#66c2a5", "1": "#fc8d62"}  # same consistent palette
+    bins = np.linspace(0, 1, target_bin_count + 1)
+
+    sns.histplot(data=df, x="proba", hue="true_label", bins=bins,
+                 stat="density", element="step", common_norm=False, palette=palette, ax=ax)
+
+    ax.axvline(threshold, color="red", linestyle="--", label=f"Threshold = {threshold:.2f}")
+    ax.set_title(title)
+    ax.set_xlabel("Predicted Probability")
+    ax.set_ylabel("Density")
+
+    handles = [
+        plt.Line2D([0], [0], color=palette["0"], label="Class 0"),
+        plt.Line2D([0], [0], color=palette["1"], label="Class 1"),
+        plt.Line2D([0], [0], color="red", linestyle="--", label=f"Threshold = {threshold:.2f}")
+    ]
+    ax.legend(handles=handles, title="Legend")

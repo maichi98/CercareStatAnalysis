@@ -103,3 +103,45 @@ def print_metrics(start_txt, dict_metrics):
     print(f"{'Precision':<20} | {dict_metrics['precision']:>9.1f}")
     print(f"{'F1 Score':<20} | {dict_metrics['f1']:>9.1f}")
     print("=" * 50)
+
+
+def compute_sigmoid_ci(x_train, y_train_proba, feature, model, x_range, z=1.96):
+
+    # Build design matrix for new points (x_range)
+    X_design = np.hstack([
+        np.ones_like(x_range).reshape(-1, 1),
+        x_range.reshape(-1, 1)
+    ])
+
+    # Extract model coefficients
+    coef = np.concatenate([model.intercept_, model.coef_.flatten()])
+
+    # Design matrix for the training set :
+    X_fit = np.hstack([
+        np.ones_like(x_train[feature]).reshape(-1, 1),
+        x_train[[feature]].values
+    ])
+
+    # Compute V matrix = diag(p * (1 - p))
+    p = y_train_proba
+    V = np.diag(p * (1 - p))
+
+    # Covariance of beta (asymptotic)
+    cov_matrix = np.linalg.inv(X_fit.T @ V @ X_fit)
+
+    # Logit predictions on the grid
+    logit_preds = X_design @ coef
+
+    # Standard errors: SE[η(x)] = sqrt(xᵗ Σ x)
+    std_errors = np.sqrt(np.sum((X_design @ cov_matrix) * X_design, axis=1))
+
+    # Confidence bounds on logit
+    lower_logit = logit_preds - z * std_errors
+    upper_logit = logit_preds + z * std_errors
+
+    # Apply sigmoid
+    y_pred = 1 / (1 + np.exp(-logit_preds))
+    y_lower = 1 / (1 + np.exp(-lower_logit))
+    y_upper = 1 / (1 + np.exp(-upper_logit))
+
+    return y_pred, y_lower, y_upper

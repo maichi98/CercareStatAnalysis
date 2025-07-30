@@ -4,10 +4,17 @@ from IPython.display import display
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss
 from scipy.stats import pearsonr, spearmanr
+from sklearn.calibration import calibration_curve
 
 from biomarker import Biomarker
 import constants
+from delong import delong_roc_variance
+from plots import plot_roc, plot_confusion_matrix, plot_sigmoid_with_ci, plot_calibration_curve, plot_proba_distribution
+from metrics import compute_youden_cutoff, compute_metrics, get_auc_ci, print_metrics, compute_sigmoid_ci
 
 
 class Unibiomarker(Biomarker):
@@ -155,3 +162,112 @@ class Unibiomarker(Biomarker):
             print("The ratio is a worthwhile feature to explore ! ")
 
         print("=" * 150)
+
+    def evaluate_logistic_univariate_model(self, feature, target="Diagnosis", brier_bins_train=10, brier_bins_test=5, target_bin_count=100):
+
+        # Prepare data
+        df_train = self.data[[feature, target]].dropna()
+        df_test = self.test_data[[feature, target]].dropna()
+
+        x_train, y_train = df_train[feature], df_train[target]
+        x_test, y_test = df_test[feature], df_test[target]
+
+        model = LogisticRegression(solver="liblinear")
+        model.fit(x_train, y_train)
+        y_train_proba, y_test_proba = model.predict_proba(x_train)[:, 1], model.predict_proba(x_test)[:, 1]
+
+        # ROC + optimal cutoff :
+        fpr_train, tpr_train, best_idx, cutoff = compute_youden_cutoff(y_true=y_train, y_pred=y_train_proba)
+        fpr_test, tpr_test, _, _ = compute_youden_cutoff(y_true=y_test, y_pred=y_test_proba)
+        # predictions :
+        y_train_pred_05, y_test_pred_05 = (y_train_proba >= 0.5).astype(int), (y_test_proba >= 0.5).astype(int)
+        y_train_pred_youden, y_test_pred_youden = (y_train_proba >= cutoff).astype(int), (y_test_proba >= cutoff).astype(int)
+
+        # AUCs and 95% CIs :
+        auc_train, auc_cov_train = delong_roc_variance(y_train.to_numpy(), y_train_proba)
+        ci_train = get_auc_ci(auc_train, auc_cov_train)
+        auc_test, auc_cov_test = delong_roc_variance(y_test.to_numpy(), y_test_proba)
+        ci_test = get_auc_ci(auc_test, auc_cov_test)
+
+        # Metrics :
+        train_metrics_05 = compute_metrics(y_true=y_train, y_pred=y_train_pred_05)
+        train_metrics_youden = compute_metrics(y_true=y_train, y_pred=y_train_pred_youden)
+        test_metrics_05 = compute_metrics(y_true=y_test, y_pred=y_test_pred_05)
+        test_metrics_youden = compute_metrics(y_true=y_test, y_pred=y_test_pred_youden)
+
+        # Log-odds and odds ratio:
+        log_odds = model.coef_[0][0]
+        odds_ratio = np.exp(log_odds)
+
+        # Print Summary :
+        print("=" * 100)
+        print(f"\nLogistic Regression Summary for Feature: {feature}")
+        print("-" * 100)
+        print(f"Log-Odds Coefficient : {log_odds:.4f}")
+        print(f"Odds Ratio           : {odds_ratio:.4f}")
+        print(f"Youden's J Threshold : {cutoff:.4f}")
+        print("-" * 100)
+
+        print_metrics(f"[{feature}] Train @ 0.5", train_metrics_05)
+        print_metrics(f"[{feature}] Train @ Youden", train_metrics_youden)
+        print_metrics(f"[{feature}] Test @ 0.5", test_metrics_05)
+        print_metrics(f"[{feature}] Test @ Youden", test_metrics_youden)
+
+        # Plot the confusion matrices :
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+        plot_confusion_matrix(ax=axes[0, 0], cm=train_metrics_05["cm"], title=f"[{feature}] Train @ 0.5")
+        plot_confusion_matrix(ax=axes[0, 1], cm=train_metrics_youden["cm"], title=f"[{feature}] Train @ Youden")
+        plot_confusion_matrix(ax=axes[1, 0], cm=test_metrics_05["cm"], title=f"[{feature}] Test @ 0.5")
+        plot_confusion_matrix(ax=axes[1, 1], cm=test_metrics_youden["cm"], title=f"[{feature}] Test @ Youden")
+
+        plt.tight_layout()
+        plt.show()
+
+        # Calibration + brier :
+        brier_train = brier_score_loss(y_true=y_train, y_prob=y_train_proba)
+        brier_test = brier_score_loss(y_true=y_test, y_prob=y_test_proba)
+        prob_true_train, prob_pred_train = calibration_curve(y_true=y_train, y_prob=y_train_proba, n_bins=brier_bins_train)
+        prob_true_test, prob_pred_test = calibration_curve(y_true=y_test, y_prob=y_test_proba, n_bins=brier_bins_test)
+
+        # Sigmoid CI computation :
+        x_range = np.linspace(x_train[feature].min(), x_train[feature].max(), 300)
+        y_pred, y_lower, y_upper = compute_sigmoid_ci(x_train, y_train_proba, feature, model, x_range)
+
+        # ROC + Sigmoid + Calibration plots :
+        fig, axes = plt.subplots(4, 2, figsize=(16, 18))
+
+        # === Row 0: ROC Curves ===
+        plot_roc(ax=axes[0, 0], fpr=fpr_train, tpr=tpr_train, phase="Train", title=f"ROC Curve (Train) [{feature}]",
+                 auc=auc_train, ci=ci_train, cutoff=cutoff, add_youden=True, best_idx=best_idx)
+
+        plot_roc(ax=axes[0, 1], fpr=fpr_test, tpr=tpr_test, phase="Test", title=f"ROC Curve (Test) [{feature}]",
+                 auc=auc_test, ci=ci_test, cutoff=cutoff)
+
+        # === Row 1: Sigmoid Curves ===
+        plot_sigmoid_with_ci(ax=axes[1, 0], x=x_train, y_proba=y_train_proba, y_true=y_train, x_range=x_range,
+                             y_pred=y_pred, y_lower=y_lower, y_upper=y_upper, threshold=cutoff,
+                             title=f"Fitted Sigmoid (Train) [{feature}]", feature=feature)
+
+        plot_sigmoid_with_ci(ax=axes[1, 1], x=x_test, y_proba=y_test_proba, y_true=y_test, x_range=x_range,
+                             y_pred=y_pred, y_lower=y_lower, y_upper=y_upper, threshold=cutoff,
+                             title=f"Fitted Sigmoid (Test) [{feature}]", feature=feature)
+
+        # === Row 2: Predicted Probability Distributions ===
+        plot_proba_distribution(ax=axes[2, 0], y_proba=y_train_proba, y_true=y_train,
+                                threshold=cutoff, title="Predicted Probability Distribution (Train)",
+                                target_bin_count=target_bin_count)
+
+        plot_proba_distribution(ax=axes[2, 1], y_proba=y_test_proba, y_true=y_test,
+                                threshold=cutoff, title="Predicted Probability Distribution (Test)",
+                                target_bin_count=target_bin_count)
+
+        # === Row 3: Calibration Curves ===
+        plot_calibration_curve(ax=axes[3, 0], prob_pred=prob_pred_train, prob_true=prob_true_train,
+                               title=f"Calibration Curve (Train) [{feature}]", brier_score=brier_train)
+
+        plot_calibration_curve(ax=axes[3, 1], prob_pred=prob_pred_test, prob_true=prob_true_test,
+                               title=f"Calibration Curve (Test) [{feature}]", brier_score=brier_test)
+
+        plt.tight_layout()
+        plt.show()
