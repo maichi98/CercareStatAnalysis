@@ -1,5 +1,5 @@
-from pathlib import Path
-import pandas as pd
+from sklearn.manifold import TSNE
+from scipy.stats import zscore
 import numpy as np
 
 
@@ -45,3 +45,25 @@ def get_adaptive_distribution_bins(data, feature, target_bin_count=100):
     bin_width = data_range / target_bin_count
 
     return np.arange(min_val, max_val + bin_width, bin_width)
+
+
+def fit_tsne(x_data, perplexity):
+    return TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        random_state=42
+    ).fit_transform(x_data)
+
+
+def winsorize_df_to_nan(df, lower=0.0, upper=1.0):
+
+    df = df.copy()
+
+    for col in df.select_dtypes(include=[int, float, np.number]).columns:
+        q_low = df[col].quantile(lower)
+        q_high = df[col].quantile(upper)
+
+        mask = (df[col] >= q_low) & (df[col] <= q_high)
+        df.loc[~mask, col] = np.nan  # Set outliers to NaN
+
+    return df

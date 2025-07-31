@@ -1,25 +1,18 @@
+from sklearn.tree import DecisionTreeClassifier, plot_tree, export_text
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import matplotlib.patches as mpatches
 from IPython.display import display
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
-import numpy as np
 from itertools import combinations
-from sklearn.tree import DecisionTreeClassifier, plot_tree, export_text
-
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 from scipy.stats import pearsonr, spearmanr
-from sklearn.calibration import calibration_curve
 from sklearn.preprocessing import StandardScaler
 
-from biomarker import Biomarker
-import constants
-from delong import delong_roc_variance
-from plots import *
 from metrics import compute_youden_cutoff, compute_metrics, get_auc_ci, print_metrics, compute_sigmoid_ci
+from delong import delong_roc_variance
+from biomarker import Biomarker
+from plots import *
 
 
 class Unibiomarker(Biomarker):

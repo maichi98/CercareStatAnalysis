@@ -244,3 +244,28 @@ def plot_svm_decision_surfaces(ax_geom, ax_proba, model, X_scaled, y, feature_na
         plt.Line2D([], [], color='white', linestyle='--', label='P(x) = 0.5'),
         plt.Line2D([], [], color='limegreen', linestyle='-', label=f'Youden P(x) = {youden_p:.2f}')
     ])
+
+
+def plot_embedding_scatter(x_embedded, y_labels, title, ax=None, style=None):
+
+    label_map = {k: v["label"] for k, v in constants.DIAGNOSIS_INFO.items()}
+    palette = {v["label"]: v["color"] for v in constants.DIAGNOSIS_INFO.values()}
+
+    y_mapped = y_labels.map(label_map)
+
+    scatter_args = {
+        "x": x_embedded[:, 0],
+        "y": x_embedded[:, 1],
+        "hue": y_mapped,
+        "palette": palette,
+        "edgecolor": "black",
+        "s": 80,
+        "alpha": 0.8
+    }
+
+    if style is not None:
+        scatter_args["style"] = style
+
+    sns.scatterplot(**scatter_args, ax=ax)
+    ax.set_title(title)
+    ax.legend(title="Diagnosis" if style is None else "Diagnosis / Set")
