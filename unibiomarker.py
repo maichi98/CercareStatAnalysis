@@ -8,6 +8,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 from scipy.stats import pearsonr, spearmanr
 from sklearn.preprocessing import StandardScaler
+import statsmodels.api as sm
+import sklearn
 
 from metrics import compute_youden_cutoff, compute_metrics, get_auc_ci, print_metrics, compute_sigmoid_ci
 from delong import delong_roc_variance
@@ -170,7 +172,8 @@ class Unibiomarker(Biomarker):
         x_train, y_train = df_train[[feature]], df_train[target]
         x_test, y_test = df_test[[feature]], df_test[target]
 
-        model = LogisticRegression(solver="liblinear")
+        model = LogisticRegression(penalty=None,)
+
         model.fit(x_train, y_train)
         y_train_proba, y_test_proba = model.predict_proba(x_train)[:, 1], model.predict_proba(x_test)[:, 1]
 
@@ -206,6 +209,30 @@ class Unibiomarker(Biomarker):
         print(f"Youden's J Threshold : {cutoff:.4f}")
         print("-" * 100)
 
+        # Additional stat inference using statmodels :
+        x_train_sm = sm.add_constant(x_train)
+        logit_model = sm.Logit(y_train, x_train_sm).fit(disp=0)
+
+        # coef = logit_model.params[1]
+        # se = logit_model.bse[1]
+        # pval = logit_model.pvalues[1]
+        # ci_low, ci_high = logit_model.conf_int().iloc[1]
+
+        coef = logit_model.params.iloc[1]
+        se = logit_model.bse.iloc[1]
+        pval = logit_model.pvalues.iloc[1]
+        ci_low, ci_high = logit_model.conf_int().iloc[1]
+
+        # Convert to odds ratio scale
+        odds_ratio_sm = np.exp(coef)
+        ci_low_exp, ci_high_exp = np.exp(ci_low), np.exp(ci_high)
+
+        print("\n--- Inference Using statsmodels ---")
+        print(f"Odds Ratio (statsmodels)  : {odds_ratio_sm:.4f}")
+        print(f"95% CI for OR             : ({ci_low_exp:.4f}, {ci_high_exp:.4f})")
+        print(f"p-value                   : {pval:.4e}")
+        print("-" * 100)
+
         print_metrics(f"[{feature}] Train @ 0.5", train_metrics_05)
         print_metrics(f"[{feature}] Train @ Youden", train_metrics_youden)
         print_metrics(f"[{feature}] Test @ 0.5", test_metrics_05)
@@ -223,8 +250,8 @@ class Unibiomarker(Biomarker):
         plt.show()
 
         # Calibration + brier :
-        brier_train = brier_score_loss(y_true=y_train, y_proba=y_train_proba)
-        brier_test = brier_score_loss(y_true=y_test, y_proba=y_test_proba)
+        brier_train = brier_score_loss(y_true=y_train, y_prob=y_train_proba)
+        brier_test = brier_score_loss(y_true=y_test, y_prob=y_test_proba)
         prob_true_train, prob_pred_train = calibration_curve(y_true=y_train, y_prob=y_train_proba, n_bins=brier_bins_train)
         prob_true_test, prob_pred_test = calibration_curve(y_true=y_test, y_prob=y_test_proba, n_bins=brier_bins_test)
 
@@ -281,7 +308,7 @@ class Unibiomarker(Biomarker):
         x_train_scaled = scaler.fit_transform(x_train)
         x_test_scaled = scaler.transform(x_test)
 
-        model = LogisticRegression(solver="liblinear")
+        model = LogisticRegression(penalty=None,)
         model.fit(x_train_scaled, y_train)
         y_train_proba, y_test_proba = model.predict_proba(x_train_scaled)[:, 1], model.predict_proba(x_test_scaled)[:, 1]
 
@@ -306,8 +333,8 @@ class Unibiomarker(Biomarker):
         ci_test = get_auc_ci(auc_test, auc_cov_test)
 
         # Brier
-        brier_train = brier_score_loss(y_train, y_proba=y_train_proba)
-        brier_test = brier_score_loss(y_test, y_proba=y_test_proba)
+        brier_train = brier_score_loss(y_train, y_prob=y_train_proba)
+        brier_test = brier_score_loss(y_test, y_prob=y_test_proba)
 
         # Calibration
         prob_true_train, prob_pred_train = calibration_curve(y_train, y_train_proba, n_bins=brier_bins_train)
@@ -555,8 +582,8 @@ class Unibiomarker(Biomarker):
         ci_test = get_auc_ci(auc_test, auc_cov_test)
 
         # Brier
-        brier_train = brier_score_loss(y_train, y_proba=y_train_proba)
-        brier_test = brier_score_loss(y_test, y_proba=y_test_proba)
+        brier_train = brier_score_loss(y_train, y_prob=y_train_proba)
+        brier_test = brier_score_loss(y_test, y_prob=y_test_proba)
 
         # Calibration
         prob_true_train, prob_pred_train = calibration_curve(y_train, y_train_proba, n_bins=10)

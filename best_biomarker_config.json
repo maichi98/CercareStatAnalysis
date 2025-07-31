@@ -1,0 +1,18 @@
+{
+  "subset": [
+    "CBV_corr",
+    "CBV_noncorr",
+    "DELAY",
+    "OEF",
+    "COV"
+  ],
+  "auc": 0.9642857142857143,
+  "config": {
+    "n_estimators": 20,
+    "max_depth": 3,
+    "bootstrap": true,
+    "min_samples_split": 5,
+    "min_samples_leaf": 1,
+    "max_features": 1
+  }
+}

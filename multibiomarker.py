@@ -1,19 +1,14 @@
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
-import numpy as np
 from sklearn.metrics import brier_score_loss
 import umap
 import shap
 from sklearn.ensemble import RandomForestClassifier
 from itertools import product
 from sklearn.metrics import roc_auc_score
-from xgboost import XGBClassifier, plot_importance
+from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler
-from metrics import compute_metrics, print_metrics
-from delong import *
-from tqdm.auto import tqdm
+from sklearn.linear_model import LogisticRegression
 
+from delong import *
 from plots import *
 from metrics import *
 from utils import *
@@ -194,6 +189,76 @@ class MultiBiomarker(Biomarker):
             plt.tight_layout()
             plt.show()
 
+    def evaluate_logistic_regression_model(self, target="Diagnosis"):
+        features = self.params
+
+        df_train = self.data[features + [target]].dropna()
+        df_test = self.test_data[features + [target]].dropna()
+
+        x_train, y_train = df_train[features], df_train[target]
+        x_test, y_test = df_test[features], df_test[target]
+
+        # === Scale
+        scaler = StandardScaler()
+        x_train_scaled = scaler.fit_transform(x_train)
+        x_test_scaled = scaler.transform(x_test)
+
+        # === Train logistic regression
+        model = LogisticRegression(max_iter=1000)
+        model.fit(x_train_scaled, y_train)
+
+        # === Predict probabilities and labels
+        y_train_proba = model.predict_proba(x_train_scaled)[:, 1]
+        y_test_proba = model.predict_proba(x_test_scaled)[:, 1]
+        y_train_pred = (y_train_proba >= 0.5).astype(int)
+        y_test_pred = (y_test_proba >= 0.5).astype(int)
+
+        # === Metrics
+        train_metrics = compute_metrics(y_train, y_train_pred)
+        test_metrics = compute_metrics(y_test, y_test_pred)
+
+        auc_train = roc_auc_score(y_train, y_train_proba)
+        auc_test = roc_auc_score(y_test, y_test_proba)
+
+        print("=" * 100)
+        print("MULTIVARIATE LOGISTIC REGRESSION")
+        print("-" * 100)
+        print(f"AUC (Train): {auc_train:.3f}")
+        print(f"AUC (Test) : {auc_test:.3f}")
+        print("-" * 100)
+
+        print_metrics("Logistic Regression Train", train_metrics)
+        print_metrics("Logistic Regression Test", test_metrics)
+
+        # === Confusion Matrices
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        plot_confusion_matrix(axes[0], train_metrics["cm"], title="Confusion Matrix — Train")
+        plot_confusion_matrix(axes[1], test_metrics["cm"], title="Confusion Matrix — Test")
+        plt.tight_layout()
+        plt.show()
+
+        # === ROC Curves
+        fpr_train, tpr_train, _ = roc_curve(y_train, y_train_proba)
+        fpr_test, tpr_test, _ = roc_curve(y_test, y_test_proba)
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        plot_roc(axes[0], "Train", fpr_train, tpr_train, auc_train, (0, 0), title="ROC Curve — Train")
+        plot_roc(axes[1], "Test", fpr_test, tpr_test, auc_test, (0, 0), title="ROC Curve — Test")
+        plt.tight_layout()
+        plt.show()
+
+        # === Coefficients
+        coef_df = pd.DataFrame({
+            "Feature": features,
+            "Coefficient": model.coef_[0]
+        }).sort_values(by="Coefficient", key=abs, ascending=False)
+
+        plt.figure(figsize=(10, 6))
+        sns.barplot(data=coef_df, x="Coefficient", y="Feature")
+        plt.title("Logistic Regression Coefficients")
+        plt.tight_layout()
+        plt.show()
+
     def evaluate_xgboost_model(self,
                                target="Diagnosis",
                                max_depth=3,
@@ -353,7 +418,6 @@ class MultiBiomarker(Biomarker):
         ci_train = get_auc_ci(auc_train, auc_cov_train)
         ci_test = get_auc_ci(auc_test, auc_cov_test)
 
-
         # === Summary
         print("=" * 100)
         print(f"RANDOM FOREST (n={n_estimators}, max_depth={max_depth}, max_features={max_features})")
@@ -402,7 +466,6 @@ class MultiBiomarker(Biomarker):
     def grid_search_random_forest(self, param_grid, target="Diagnosis"):
 
         features = self.params
-        n_features = len(features)
 
         df_train = self.data[features + [target]].dropna()
         df_test = self.test_data[features + [target]].dropna()
@@ -419,32 +482,122 @@ class MultiBiomarker(Biomarker):
         results = []
 
         combos = list(product(*values))
-        loop = tqdm(combos)  # for progress bar
-        # loop = combos
 
-        print(f"Grid search over {len(combos)} combinations...")
-        for v in loop:
+        for v in combos:
             params = dict(zip(keys, v))
-
             model = RandomForestClassifier(**params, random_state=42)
             model.fit(x_train_scaled, y_train)
-            y_test_proba = model.predict_proba(x_test_scaled)[:, 1]
 
             try:
+                y_test_proba = model.predict_proba(x_test_scaled)[:, 1]
                 auc = roc_auc_score(y_test, y_test_proba)
-            except ValueError:
+            except Exception as e:
+                print(f"Error calculating AUC for params {params}: {e}")
                 auc = 0.0
 
             results.append((params, auc))
-
-            # print(f"Params: {params} → AUC (Test): {auc:.3f}")
 
             if auc > best_auc:
                 best_auc = auc
                 best_config = params
 
-        print("Best Configuration:")
-        print(best_config)
-        print(f"Best AUC (Test): {best_auc:.3f}")
-
         return best_config, best_auc, results
+
+
+if __name__ == "__main__":
+    import json
+    import pandas as pd
+    from itertools import combinations
+    from multiprocessing import Pool, cpu_count
+    from tqdm import tqdm
+
+    from constants import DICT_RENAMING_MAPPING
+    from utils import format_dataframe, add_ratio_columns
+
+    def evaluate_subset(args):
+        subset, df_data, df_test, param_grid = args
+        try:
+            mb = MultiBiomarker(biomarkers=subset, data=df_data, test_data=df_test)
+            best_config, best_auc, _ = mb.grid_search_random_forest(param_grid)
+            return {
+                "subset": subset,
+                "auc": best_auc,
+                "config": best_config
+            }
+        except Exception:
+            return {
+                "subset": subset,
+                "auc": 0.0,
+                "config": None
+            }
+
+    # === Load and preprocess data
+    df_data = pd.read_excel("data/cercare_training_data.xlsx").rename(columns=DICT_RENAMING_MAPPING)
+    df_test = pd.read_excel("data/cercare_test_data.xlsx").rename(columns=DICT_RENAMING_MAPPING)
+
+    df_data = format_dataframe(df=df_data)
+    df_test = format_dataframe(df=df_test)
+
+    add_ratio_columns(df_data)
+    add_ratio_columns(df_test)
+
+    print("Data loaded and formatted successfully.")
+
+    # === Create biomarker subsets
+    BIOMARKERS = ["CBV_corr", "CBV_noncorr", "DELAY", "CTH", "CTH MAX", "OEF", "rLEAKAGE", "rCMRO2", "COV"]
+    subsets = [combo for r in range(2, len(BIOMARKERS) + 1) for combo in combinations(BIOMARKERS, r)]
+
+    param_grid = {
+        "n_estimators": [5, 10, 20, 50, 100],
+        "max_depth": [1, 2, 3, 4, 5, None],
+        "bootstrap": [True, False],
+        "min_samples_split": [2, 5, 10],
+        "min_samples_leaf": [1, 2, 4, 6]
+    }
+
+    args_list = [
+        (subset, df_data, df_test, {
+            **param_grid,
+            "max_features": list(range(1, len(subset) + 1)) + [None]
+        })
+        for subset in subsets
+    ]
+
+    print(f"Running multiprocessing grid search on {len(args_list)} biomarker subsets using {cpu_count()} cores...")
+
+    results = []
+    with Pool(processes=cpu_count()) as pool:
+        progress = tqdm(total=len(args_list), desc="Evaluating subsets", dynamic_ncols=True)
+        for result in pool.imap(evaluate_subset, args_list):
+            if result["subset"]:
+                subset_label = ", ".join(result["subset"])
+                progress.set_postfix_str(f"{subset_label}")
+            results.append(result)
+            progress.update(1)
+        progress.close()
+
+    # === Filter and save results
+    valid_results = [r for r in results if r["config"] is not None]
+    best_result = max(valid_results, key=lambda x: x["auc"]) if valid_results else None
+
+    df_results = pd.DataFrame([
+        {
+            "subset": ", ".join(r["subset"]),
+            "auc": r["auc"],
+            **r["config"]
+        }
+        for r in valid_results
+    ])
+    df_results.to_csv("biomarker_subset_results.csv", index=False)
+
+    if best_result:
+        with open("best_biomarker_config.json", "w") as f:
+            json.dump(best_result, f, indent=2)
+
+        print("\nBest subset:")
+        print(", ".join(best_result["subset"]))
+        print(f"Best AUC: {best_result['auc']:.3f}")
+        print("Best configuration:")
+        print(json.dumps(best_result["config"], indent=2))
+    else:
+        print("No valid model configurations found.")
