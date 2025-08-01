@@ -548,7 +548,7 @@ if __name__ == "__main__":
     subsets = [combo for r in range(2, len(BIOMARKERS) + 1) for combo in combinations(BIOMARKERS, r)]
 
     param_grid = {
-        "n_estimators": [5, 10, 20, 50, 100],
+        "n_estimators": [1, 2, 3, 4, 5, 10, 20, 50, 100],
         "max_depth": [1, 2, 3, 4, 5, None],
         "bootstrap": [True, False],
         "min_samples_split": [2, 5, 10],
