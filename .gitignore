@@ -170,6 +170,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Add csv and excel files :
-*.csv
+# Add excel files :
 *.xlsx
