@@ -1,0 +1,14 @@
+{
+  "subset": [
+    "CBV_noncorr",
+    "CTH",
+    "rLEAKAGE",
+    "COV"
+  ],
+  "auc": 0.875,
+  "config": {
+    "penalty": "l2",
+    "C": 1,
+    "solver": "liblinear"
+  }
+}

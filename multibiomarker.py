@@ -7,6 +7,8 @@ from sklearn.metrics import roc_auc_score
 from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
+from sklearn.exceptions import ConvergenceWarning
+import warnings
 
 from delong import *
 from plots import *
@@ -503,6 +505,59 @@ class MultiBiomarker(Biomarker):
 
         return best_config, best_auc, results
 
+    def grid_search_logistic_regression(self, param_grid, target="Diagnosis"):
+        features = self.params
+
+        df_train = self.data[features + [target]].dropna()
+        df_test = self.test_data[features + [target]].dropna()
+        x_train, y_train = df_train[features], df_train[target]
+        x_test, y_test = df_test[features], df_test[target]
+
+        scaler = StandardScaler()
+        x_train_scaled = scaler.fit_transform(x_train)
+        x_test_scaled = scaler.transform(x_test)
+
+        keys, values = zip(*param_grid.items())
+        best_auc = -1
+        best_config = None
+        results = []
+
+        combos = list(product(*values))
+
+        for v in combos:
+            params = dict(zip(keys, v))
+
+            # Skip invalid combinations
+            if (
+                    (params["penalty"] is None and params["solver"] != "lbfgs") or
+                    (params["penalty"] == "l1" and params["solver"] not in ["liblinear", "saga"]) or
+                    (params["penalty"] == "l2" and params["solver"] not in ["liblinear", "lbfgs", "newton-cg", "sag",
+                                                                            "saga"])
+            ):
+                continue
+
+            model_params = params.copy()
+            model_params["max_iter"] = 1000
+
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                    model = LogisticRegression(**model_params)
+                    model.fit(x_train_scaled, y_train)
+                    y_test_proba = model.predict_proba(x_test_scaled)[:, 1]
+                    auc = roc_auc_score(y_test, y_test_proba)
+            except Exception as e:
+                print(f"Error calculating AUC for params {params}: {e}")
+                auc = 0.0
+
+            results.append((params, auc))
+
+            if auc > best_auc:
+                best_auc = auc
+                best_config = params
+
+        return best_config, best_auc, results
+
 
 if __name__ == "__main__":
     import json
@@ -514,22 +569,23 @@ if __name__ == "__main__":
     from constants import DICT_RENAMING_MAPPING
     from utils import format_dataframe, add_ratio_columns
 
-    def evaluate_subset(args):
+    def evaluate_rf_subset(args):
         subset, df_data, df_test, param_grid = args
         try:
             mb = MultiBiomarker(biomarkers=subset, data=df_data, test_data=df_test)
             best_config, best_auc, _ = mb.grid_search_random_forest(param_grid)
-            return {
-                "subset": subset,
-                "auc": best_auc,
-                "config": best_config
-            }
+            return {"subset": subset, "auc": best_auc, "config": best_config}
         except Exception:
-            return {
-                "subset": subset,
-                "auc": 0.0,
-                "config": None
-            }
+            return {"subset": subset, "auc": 0.0, "config": None}
+
+    def evaluate_lr_subset(args):
+        subset, df_data, df_test, param_grid = args
+        try:
+            mb = MultiBiomarker(biomarkers=subset, data=df_data, test_data=df_test)
+            best_config, best_auc, _ = mb.grid_search_logistic_regression(param_grid)
+            return {"subset": subset, "auc": best_auc, "config": best_config}
+        except Exception:
+            return {"subset": subset, "auc": 0.0, "config": None}
 
     # === Load and preprocess data
     df_data = pd.read_excel("data/cercare_training_data.xlsx").rename(columns=DICT_RENAMING_MAPPING)
@@ -545,59 +601,113 @@ if __name__ == "__main__":
 
     # === Create biomarker subsets
     BIOMARKERS = ["CBV_corr", "CBV_noncorr", "DELAY", "CTH", "CTH MAX", "OEF", "rLEAKAGE", "rCMRO2", "COV"]
-    subsets = [combo for r in range(2, len(BIOMARKERS) + 1) for combo in combinations(BIOMARKERS, r)]
-
-    param_grid = {
-        "n_estimators": [1, 2, 3, 4, 5, 10, 20, 50, 100],
-        "max_depth": [1, 2, 3, 4, 5, None],
-        "bootstrap": [True, False],
-        "min_samples_split": [2, 5, 10],
-        "min_samples_leaf": [1, 2, 4, 6]
-    }
-
-    args_list = [
-        (subset, df_data, df_test, {
-            **param_grid,
-            "max_features": list(range(1, len(subset) + 1)) + [None]
-        })
-        for subset in subsets
+    subsets = [
+        combo for r in range(2, len(BIOMARKERS) + 1)
+        for combo in combinations(BIOMARKERS, r)
+        if not {"CBV_corr", "CBV_noncorr"}.issubset(combo)
     ]
 
-    print(f"Running multiprocessing grid search on {len(args_list)} biomarker subsets using {cpu_count()} cores...")
+    # # === Random Forest
 
-    results = []
+    # rf_param_grid = {
+    #     "n_estimators": [1, 2, 3, 4, 5, 10, 20, 50, 100],
+    #     "max_depth": [1, 2, 3, 4, 5, None],
+    #     "bootstrap": [True, False],
+    #     "min_samples_split": [2, 5, 10],
+    #     "min_samples_leaf": [1, 2, 4, 6]
+    # }
+    #
+    # rf_args_list = [
+    #     (subset, df_data, df_test, {
+    #         **rf_param_grid,
+    #         "max_features": list(range(1, len(subset) + 1)) + [None]
+    #     })
+    #     for subset in subsets
+    # ]
+    #
+    # print(f"\nRunning Random Forest grid search on {len(rf_args_list)} subsets...")
+    #
+    # rf_results = []
+    # with Pool(processes=cpu_count()) as pool:
+    #     progress = tqdm(total=len(rf_args_list), desc="Random Forest", dynamic_ncols=True)
+    #     for result in pool.imap(evaluate_rf_subset, rf_args_list):
+    #         if result["subset"]:
+    #             progress.set_postfix_str(", ".join(result["subset"]))
+    #         rf_results.append(result)
+    #         progress.update(1)
+    #     progress.close()
+    #
+    # valid_rf_results = [r for r in rf_results if r["config"] is not None]
+    # best_rf_result = max(valid_rf_results, key=lambda x: x["auc"]) if valid_rf_results else None
+    #
+    # df_rf_results = pd.DataFrame([
+    #     {
+    #         "subset": ", ".join(r["subset"]),
+    #         "auc": r["auc"],
+    #         **r["config"]
+    #     }
+    #     for r in valid_rf_results
+    # ])
+    # df_rf_results.to_csv("biomarker_rf_results.csv", index=False)
+    #
+    # if best_rf_result:
+    #     with open("best_rf_config.json", "w") as f:
+    #         json.dump(best_rf_result, f, indent=2)
+    #     print("\n[RF] Best subset:")
+    #     print(", ".join(best_rf_result["subset"]))
+    #     print(f"[RF] Best AUC: {best_rf_result['auc']:.3f}")
+    #     print("[RF] Best config:")
+    #     print(json.dumps(best_rf_result["config"], indent=2))
+    # else:
+    #     print("No valid Random Forest models found.")
+
+    # === Logistic Regression Grid Search
+    lr_param_grid = {
+        "penalty": [None, "l1", "l2"],
+        "C": [0.01, 0.1, 1, 10],
+        "solver": ["liblinear", "lbfgs"]
+    }
+
+    lr_args_list = [(subset, df_data, df_test, lr_param_grid) for subset in subsets]
+
+    print(f"\nRunning Logistic Regression grid search on {len(lr_args_list)} subsets...")
+
+    lr_results = []
     with Pool(processes=cpu_count()) as pool:
-        progress = tqdm(total=len(args_list), desc="Evaluating subsets", dynamic_ncols=True)
-        for result in pool.imap(evaluate_subset, args_list):
+        progress = tqdm(total=len(lr_args_list), desc="Logistic Regression", dynamic_ncols=True)
+        for result in pool.imap(evaluate_lr_subset, lr_args_list):
             if result["subset"]:
-                subset_label = ", ".join(result["subset"])
-                progress.set_postfix_str(f"{subset_label}")
-            results.append(result)
+                progress.set_postfix_str(", ".join(result["subset"]))
+            lr_results.append(result)
             progress.update(1)
         progress.close()
 
-    # === Filter and save results
-    valid_results = [r for r in results if r["config"] is not None]
-    best_result = max(valid_results, key=lambda x: x["auc"]) if valid_results else None
+    valid_lr_results = [r for r in lr_results if r["config"] is not None]
+    best_lr_result = max(valid_lr_results, key=lambda x: x["auc"]) if valid_lr_results else None
 
-    df_results = pd.DataFrame([
+    # === Create a structured DataFrame
+    df_lr_results = pd.DataFrame([
         {
             "subset": ", ".join(r["subset"]),
             "auc": r["auc"],
-            **r["config"]
+            "penalty": r["config"].get("penalty"),
+            "C": r["config"].get("C"),
+            "solver": r["config"].get("solver")
         }
-        for r in valid_results
+        for r in valid_lr_results
     ])
-    df_results.to_csv("biomarker_subset_results.csv", index=False)
 
-    if best_result:
-        with open("best_biomarker_config.json", "w") as f:
-            json.dump(best_result, f, indent=2)
+    df_lr_results.to_csv("biomarker_lr_results.csv", index=False)
 
-        print("\nBest subset:")
-        print(", ".join(best_result["subset"]))
-        print(f"Best AUC: {best_result['auc']:.3f}")
-        print("Best configuration:")
-        print(json.dumps(best_result["config"], indent=2))
+    # === Save best config and report
+    if best_lr_result:
+        with open("best_lr_config.json", "w") as f:
+            json.dump(best_lr_result, f, indent=2)
+
+        print("\n[LR] Best subset:")
+        print(", ".join(best_lr_result["subset"]))
+        print(f"[LR] Best AUC: {best_lr_result['auc']:.3f}")
+        print("[LR] Best config:")
+        print(json.dumps(best_lr_result["config"], indent=2))
     else:
-        print("No valid model configurations found.")
+        print("No valid Logistic Regression models found.")
