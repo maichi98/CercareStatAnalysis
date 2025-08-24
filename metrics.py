@@ -1,6 +1,7 @@
 from sklearn.metrics import roc_curve, confusion_matrix
 from scipy import stats
 import numpy as np
+import warnings
 
 
 def compute_youden_cutoff(y_true, y_pred):
@@ -47,18 +48,27 @@ def compute_metrics(y_true, y_pred):
         raise ValueError("No Positive samples in confusion matrix !")
     recall = tp * 100 / (tp + fn)
 
-    # Precision : TP / (TP + FP)
+    # Precision : TP / (TP + FP)  (no positive predictions -> set to 0.0)
     if (tp + fp) == 0:
-        raise ValueError("No Positive predictions in confusion matrix !")
-    precision = tp * 100 / (tp + fp)
+        warnings.warn("No positive predictions in y_pred; precision is ill-defined. Setting precision=0.0.", RuntimeWarning)
+        precision = 0.0
+    else:
+        precision = tp * 100.0 / (tp + fp)
 
     # F1 Score : 2 * (Precision * Recall) / (Precision + Recall)
-    f1_score = (2 * precision * recall) / (precision + recall)  # No need to check here
+    if (precision + recall) == 0.0:
+        # Both are zero → set F1 to 0.0 (consistent with sklearn's zero_division=0 behavior)
+        f1_score = 0.0
+    else:
+        f1_score = (2.0 * precision * recall) / (precision + recall)
 
     # Specificity : TN / (TN + FP)
+    # If there are no negative samples in y_true (tn+fp==0), set specificity=0.0 and warn.
     if (tn + fp) == 0:
-        raise ValueError("No Negative predictions in confusion matrix !")
-    specificity = tn * 100 / (tn + fp)
+        warnings.warn("No negative samples in y_true; specificity is ill-defined. Setting specificity=0.0.", RuntimeWarning)
+        specificity = 0.0
+    else:
+        specificity = tn * 100.0 / (tn + fp)
 
     return {
         "acc": acc,

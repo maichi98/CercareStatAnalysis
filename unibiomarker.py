@@ -1,4 +1,5 @@
 from sklearn.tree import DecisionTreeClassifier, plot_tree, export_text
+from statsmodels.tools.sm_exceptions import PerfectSeparationError
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import matplotlib.patches as mpatches
 from IPython.display import display
@@ -348,6 +349,74 @@ class Unibiomarker(Biomarker):
         print(f"AUC (Test) : {auc_test:.3f} (95% CI: {ci_test[0]:.3f} – {ci_test[1]:.3f})")
         print(f"Optimal Threshold (Youden’s J): {cutoff:.3f}")
         print("=" * 100)
+
+        # Adding ORs + CI :
+        x_train_sm = sm.add_constant(x_train_scaled)
+        try:
+            # Attempt MLE inference on the STANDARDIZED design
+            logit_model = sm.Logit(y_train, x_train_sm).fit(disp=0)
+        
+            conf  = logit_model.conf_int()
+            pvals = logit_model.pvalues
+        
+            print("\n--- Inference Using statsmodels ---")
+            print("Adjusted ORs per +1 SD (Training scale)")
+        
+            for j, feat in enumerate(features):  # features = [self.path, self.control]
+                idx = j + 1  # intercept is at index 0
+                coef_sd = float(logit_model.params[idx])
+                ci_low_sd, ci_high_sd = conf.iloc[idx]
+        
+                OR_sd    = np.exp(coef_sd)
+                OR_sd_lo = np.exp(ci_low_sd)
+                OR_sd_hi = np.exp(ci_high_sd)
+                pval     = float(pvals[idx])
+        
+                print(f"Odds Ratio ({feat})     : {OR_sd:.4f}")
+                print(f"95% CI for OR ({feat})  : ({OR_sd_lo:.4f}, {OR_sd_hi:.4f})")
+                print(f"p-value ({feat})        : {pval:.4e}")
+        
+                sigma = float(scaler.scale_[j])
+                print(f"Standard Deviation ({feat}) used for scaling: {sigma:.6g}")
+        
+        except (PerfectSeparationError, np.linalg.LinAlgError, FloatingPointError) as e:
+            # Fallback: bootstrap the STANDARDIZED coefficients using sklearn, then report ORs per +1 SD
+            print("\n--- Inference (bootstrap fallback due to separation) ---")
+            print("Adjusted ORs per +1 SD (Training scale) estimated via bootstrap.")
+            print(f"Reason: {type(e).__name__}: {e}")
+        
+            B = 1000  # you can lower to 200 if speed is a concern
+            rng = np.random.default_rng(42)
+            n  = len(y_train)
+            coefs = np.empty((B, len(features)))
+        
+            for b in range(B):
+                idxs = rng.integers(0, n, n)
+                # Fit *on the standardized scale* (reuse x_train_scaled rows)
+                clf_b = LogisticRegression(penalty=None).fit(x_train_scaled[idxs], y_train.iloc[idxs])
+                coefs[b, :] = clf_b.coef_[0]
+        
+            # Point estimate from your main sklearn model (standardized scale)
+            beta_hat = model.coef_[0]
+        
+            for j, feat in enumerate(features):
+                beta_dist = coefs[:, j]
+                # 95% percentile CI on the log-odds scale, then exponentiate
+                lo, hi = np.percentile(beta_dist, [2.5, 97.5])
+                OR_sd    = np.exp(beta_hat[j])
+                OR_sd_lo = np.exp(lo)
+                OR_sd_hi = np.exp(hi)
+        
+                # Two-sided bootstrap p: fraction of bootstrap coefs on the opposite side of zero
+                p_boot = 2 * min((beta_dist >= 0).mean(), (beta_dist <= 0).mean())
+        
+                print(f"Odds Ratio ({feat})     : {OR_sd:.4f}")
+                print(f"95% CI for OR ({feat})  : ({OR_sd_lo:.4f}, {OR_sd_hi:.4f})")
+                print(f"p-value ({feat})        : {p_boot:.4e}")
+        
+                sigma = float(scaler.scale_[j])
+                print(f"Standard Deviation ({feat}) used for scaling: {sigma:.6g}")
+
 
         print_metrics(f"[{self.path} + {self.control}] Train @ 0.5", train_metrics_05)
         print_metrics(f"[{self.path} + {self.control}] Train @ Youden", train_metrics_youden)
